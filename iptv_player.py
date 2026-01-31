@@ -1,55 +1,15 @@
 #!/usr/bin/env python3
-"""IPTV Desktop Player - A Python desktop application for playing IPTV channels."""
+"""IPTV Desktop Player - uses pywebview + hls.js. No VLC needed."""
 
-import ctypes
+import json
 import os
 import re
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox
-from collections import OrderedDict
-
-
-def _find_vlc_windows():
-    """Locate VLC installation on Windows and add it to DLL search paths."""
-    if sys.platform != "win32":
-        return
-    candidates = [
-        os.path.join(os.environ.get("PROGRAMFILES", ""), "VideoLAN", "VLC"),
-        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "VideoLAN", "VLC"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "VideoLAN", "VLC"),
-    ]
-    # Also check if user set a custom path via environment variable
-    env_path = os.environ.get("VLC_PATH", "")
-    if env_path:
-        candidates.insert(0, env_path)
-
-    for path in candidates:
-        if path and os.path.isfile(os.path.join(path, "libvlc.dll")):
-            os.environ["PYTHON_VLC_MODULE_PATH"] = path
-            os.environ["PATH"] = path + ";" + os.environ.get("PATH", "")
-            try:
-                os.add_dll_directory(path)
-            except (OSError, AttributeError):
-                pass
-            return
-    print("WARNING: Could not find VLC installation automatically.")
-    print("Install VLC from https://www.videolan.org/vlc/ or set VLC_PATH environment variable.")
-
-
-_find_vlc_windows()
 
 try:
-    import vlc
-except (ImportError, FileNotFoundError, OSError) as e:
-    print(f"ERROR: Could not load VLC: {e}")
-    print()
-    print("Make sure you have:")
-    print("  1. VLC media player installed (https://www.videolan.org/vlc/)")
-    print("  2. python-vlc package: pip install python-vlc")
-    print()
-    print("On Windows, VLC must be the same architecture as Python (both 64-bit or both 32-bit).")
-    print("You can also set VLC_PATH=C:\\path\\to\\VLC before running.")
+    import webview
+except ImportError:
+    print("ERROR: pywebview is required. Install with: pip install pywebview")
     sys.exit(1)
 
 
@@ -63,512 +23,285 @@ def parse_m3u(filepath):
     while i < len(lines):
         line = lines[i].strip()
         if line.startswith("#EXTINF:"):
-            info_line = line
-            # Extract group-title
-            group_match = re.search(r'group-title="([^"]*)"', info_line)
+            group_match = re.search(r'group-title="([^"]*)"', line)
             group = group_match.group(1) if group_match else "Ungrouped"
-
-            # Extract tvg-logo
-            logo_match = re.search(r'tvg-logo="([^"]*)"', info_line)
+            logo_match = re.search(r'tvg-logo="([^"]*)"', line)
             logo = logo_match.group(1) if logo_match else ""
-
-            # Extract channel name (after the last comma)
-            name_match = re.search(r",(.+)$", info_line)
+            name_match = re.search(r",(.+)$", line)
             name = name_match.group(1).strip() if name_match else "Unknown"
-
-            # Next non-empty, non-comment line is the URL
             i += 1
             while i < len(lines) and (not lines[i].strip() or lines[i].strip().startswith("#")):
                 i += 1
             if i < len(lines):
                 url = lines[i].strip()
-                channels.append({
-                    "name": name,
-                    "url": url,
-                    "group": group,
-                    "logo": logo,
-                })
+                channels.append({"name": name, "url": url, "group": group, "logo": logo})
         i += 1
     return channels
 
 
-class IPTVPlayer:
-    """Main IPTV Player application window."""
-
-    def __init__(self, root, channels):
-        self.root = root
-        self.channels = channels
-        self.current_channel = None
-        self.is_fullscreen = False
-        self.vlc_instance = vlc.Instance("--no-xlib")
-        self.media_player = self.vlc_instance.media_player_new()
-
-        self._setup_window()
-        self._build_ui()
-        self._build_groups(channels)
-        self._bind_events()
-
-        # Periodically update the UI state
-        self._update_ui()
-
-    def _setup_window(self):
-        self.root.title("IPTV Player")
-        self.root.geometry("1200x700")
-        self.root.minsize(900, 500)
-        self.root.configure(bg="#1a1a2e")
-
-        # Style configuration
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Sidebar.TFrame", background="#16213e")
-        style.configure("Player.TFrame", background="#0f0f0f")
-        style.configure("Controls.TFrame", background="#1a1a2e")
-        style.configure(
-            "Group.TLabel",
-            background="#16213e",
-            foreground="#e94560",
-            font=("Helvetica", 11, "bold"),
-            padding=(10, 6),
-        )
-        style.configure(
-            "Channel.TLabel",
-            background="#16213e",
-            foreground="#eaeaea",
-            font=("Helvetica", 10),
-            padding=(20, 4),
-        )
-        style.configure(
-            "ChannelActive.TLabel",
-            background="#e94560",
-            foreground="#ffffff",
-            font=("Helvetica", 10, "bold"),
-            padding=(20, 4),
-        )
-        style.configure(
-            "Title.TLabel",
-            background="#1a1a2e",
-            foreground="#e94560",
-            font=("Helvetica", 14, "bold"),
-        )
-        style.configure(
-            "NowPlaying.TLabel",
-            background="#1a1a2e",
-            foreground="#eaeaea",
-            font=("Helvetica", 10),
-        )
-        style.configure(
-            "Status.TLabel",
-            background="#1a1a2e",
-            foreground="#888888",
-            font=("Helvetica", 9),
-        )
-        style.configure(
-            "TButton",
-            background="#e94560",
-            foreground="#ffffff",
-            font=("Helvetica", 10, "bold"),
-            padding=6,
-        )
-        style.map(
-            "TButton",
-            background=[("active", "#c81e45"), ("pressed", "#a01535")],
-        )
-
-    def _build_ui(self):
-        # Main horizontal pane
-        self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        self.main_pane.pack(fill=tk.BOTH, expand=True)
-
-        # --- Sidebar ---
-        self.sidebar_frame = tk.Frame(self.main_pane, bg="#16213e", width=300)
-        self.main_pane.add(self.sidebar_frame, weight=0)
-
-        # App title
-        title_frame = tk.Frame(self.sidebar_frame, bg="#0f3460", pady=10)
-        title_frame.pack(fill=tk.X)
-        tk.Label(
-            title_frame,
-            text="IPTV Player",
-            bg="#0f3460",
-            fg="#e94560",
-            font=("Helvetica", 16, "bold"),
-        ).pack()
-
-        # Search box
-        search_frame = tk.Frame(self.sidebar_frame, bg="#16213e", pady=5, padx=10)
-        search_frame.pack(fill=tk.X)
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._on_search)
-        self.search_entry = tk.Entry(
-            search_frame,
-            textvariable=self.search_var,
-            bg="#1a1a2e",
-            fg="#eaeaea",
-            insertbackground="#e94560",
-            font=("Helvetica", 10),
-            relief=tk.FLAT,
-            bd=5,
-        )
-        self.search_entry.pack(fill=tk.X)
-        self.search_entry.insert(0, "Search channels...")
-        self.search_entry.bind("<FocusIn>", self._on_search_focus_in)
-        self.search_entry.bind("<FocusOut>", self._on_search_focus_out)
-
-        # Channel list with scrollbar
-        list_frame = tk.Frame(self.sidebar_frame, bg="#16213e")
-        list_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.channel_canvas = tk.Canvas(list_frame, bg="#16213e", highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.channel_canvas.yview)
-        self.scrollable_frame = tk.Frame(self.channel_canvas, bg="#16213e")
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.channel_canvas.configure(scrollregion=self.channel_canvas.bbox("all")),
-        )
-        self.canvas_window = self.channel_canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.channel_canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        self.channel_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Make scrollable frame fill canvas width
-        self.channel_canvas.bind("<Configure>", self._on_canvas_configure)
-
-        # Bind mousewheel
-        self.channel_canvas.bind_all("<Button-4>", self._on_mousewheel_up)
-        self.channel_canvas.bind_all("<Button-5>", self._on_mousewheel_down)
-
-        # --- Right side (player + controls) ---
-        self.right_frame = tk.Frame(self.main_pane, bg="#0f0f0f")
-        self.main_pane.add(self.right_frame, weight=1)
-
-        # Video frame
-        self.video_frame = tk.Frame(self.right_frame, bg="#000000")
-        self.video_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Placeholder label when nothing is playing
-        self.placeholder_label = tk.Label(
-            self.video_frame,
-            text="Select a channel to start watching",
-            bg="#000000",
-            fg="#444444",
-            font=("Helvetica", 16),
-        )
-        self.placeholder_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-
-        # Controls bar
-        controls_frame = tk.Frame(self.right_frame, bg="#1a1a2e", pady=8, padx=10)
-        controls_frame.pack(fill=tk.X)
-
-        # Now playing label
-        self.now_playing_var = tk.StringVar(value="No channel selected")
-        tk.Label(
-            controls_frame,
-            textvariable=self.now_playing_var,
-            bg="#1a1a2e",
-            fg="#eaeaea",
-            font=("Helvetica", 11),
-            anchor="w",
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        # Control buttons
-        btn_frame = tk.Frame(controls_frame, bg="#1a1a2e")
-        btn_frame.pack(side=tk.RIGHT)
-
-        self.stop_btn = tk.Button(
-            btn_frame,
-            text="Stop",
-            command=self._stop,
-            bg="#e94560",
-            fg="white",
-            font=("Helvetica", 10, "bold"),
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            activebackground="#c81e45",
-            activeforeground="white",
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=3)
-
-        self.mute_btn = tk.Button(
-            btn_frame,
-            text="Mute",
-            command=self._toggle_mute,
-            bg="#0f3460",
-            fg="white",
-            font=("Helvetica", 10, "bold"),
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            activebackground="#16213e",
-            activeforeground="white",
-        )
-        self.mute_btn.pack(side=tk.LEFT, padx=3)
-
-        self.fullscreen_btn = tk.Button(
-            btn_frame,
-            text="Fullscreen",
-            command=self._toggle_fullscreen,
-            bg="#0f3460",
-            fg="white",
-            font=("Helvetica", 10, "bold"),
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            activebackground="#16213e",
-            activeforeground="white",
-        )
-        self.fullscreen_btn.pack(side=tk.LEFT, padx=3)
-
-        # Volume slider
-        vol_frame = tk.Frame(controls_frame, bg="#1a1a2e")
-        vol_frame.pack(side=tk.RIGHT, padx=(0, 10))
-        tk.Label(vol_frame, text="Vol:", bg="#1a1a2e", fg="#888888", font=("Helvetica", 9)).pack(side=tk.LEFT)
-        self.volume_var = tk.IntVar(value=80)
-        self.volume_slider = tk.Scale(
-            vol_frame,
-            from_=0,
-            to=100,
-            orient=tk.HORIZONTAL,
-            variable=self.volume_var,
-            command=self._on_volume_change,
-            bg="#1a1a2e",
-            fg="#eaeaea",
-            troughcolor="#0f3460",
-            highlightthickness=0,
-            sliderrelief=tk.FLAT,
-            length=100,
-            showvalue=False,
-        )
-        self.volume_slider.pack(side=tk.LEFT)
-
-        # Status bar
-        status_frame = tk.Frame(self.right_frame, bg="#111111", pady=3, padx=10)
-        status_frame.pack(fill=tk.X)
-        self.status_var = tk.StringVar(value="Ready")
-        tk.Label(
-            status_frame,
-            textvariable=self.status_var,
-            bg="#111111",
-            fg="#666666",
-            font=("Helvetica", 9),
-            anchor="w",
-        ).pack(side=tk.LEFT, fill=tk.X)
-
-    def _on_canvas_configure(self, event):
-        self.channel_canvas.itemconfig(self.canvas_window, width=event.width)
-
-    def _build_groups(self, channels):
-        """Build the grouped channel list in the sidebar."""
-        # Clear existing widgets
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-
-        # Group channels
-        groups = OrderedDict()
-        for ch in channels:
-            g = ch["group"]
-            if g not in groups:
-                groups[g] = []
-            groups[g].append(ch)
-
-        self.channel_labels = {}
-        self.group_frames = {}
-
-        for group_name, group_channels in groups.items():
-            # Group header
-            group_header = tk.Frame(self.scrollable_frame, bg="#0f3460", cursor="hand2")
-            group_header.pack(fill=tk.X, pady=(1, 0))
-
-            header_label = tk.Label(
-                group_header,
-                text=f"  {group_name} ({len(group_channels)})",
-                bg="#0f3460",
-                fg="#e94560",
-                font=("Helvetica", 11, "bold"),
-                anchor="w",
-                pady=6,
-                padx=5,
-            )
-            header_label.pack(fill=tk.X)
-
-            # Channel container (collapsible)
-            channel_container = tk.Frame(self.scrollable_frame, bg="#16213e")
-            channel_container.pack(fill=tk.X)
-            self.group_frames[group_name] = (channel_container, header_label, True)
-
-            # Toggle collapse on header click
-            header_label.bind("<Button-1>", lambda e, g=group_name: self._toggle_group(g))
-            group_header.bind("<Button-1>", lambda e, g=group_name: self._toggle_group(g))
-
-            for ch in group_channels:
-                ch_frame = tk.Frame(channel_container, bg="#16213e", cursor="hand2")
-                ch_frame.pack(fill=tk.X)
-
-                ch_label = tk.Label(
-                    ch_frame,
-                    text=f"    {ch['name']}",
-                    bg="#16213e",
-                    fg="#cccccc",
-                    font=("Helvetica", 10),
-                    anchor="w",
-                    pady=3,
-                    padx=5,
-                )
-                ch_label.pack(fill=tk.X)
-
-                # Store reference
-                self.channel_labels[ch["url"]] = ch_label
-
-                # Bind click to play
-                ch_label.bind("<Button-1>", lambda e, c=ch: self._play_channel(c))
-                ch_frame.bind("<Button-1>", lambda e, c=ch: self._play_channel(c))
-
-                # Hover effects
-                ch_label.bind("<Enter>", lambda e, lbl=ch_label: self._on_channel_hover(lbl, True))
-                ch_label.bind("<Leave>", lambda e, lbl=ch_label: self._on_channel_hover(lbl, False))
-
-    def _toggle_group(self, group_name):
-        container, header_label, visible = self.group_frames[group_name]
-        if visible:
-            container.pack_forget()
-            self.group_frames[group_name] = (container, header_label, False)
-        else:
-            # Re-pack after the header
-            container.pack(fill=tk.X)
-            self.group_frames[group_name] = (container, header_label, True)
-
-    def _on_channel_hover(self, label, entering):
-        if self.current_channel and self.channel_labels.get(self.current_channel["url"]) == label:
-            return
-        if entering:
-            label.configure(bg="#1a2744", fg="#ffffff")
-        else:
-            label.configure(bg="#16213e", fg="#cccccc")
-
-    def _play_channel(self, channel):
-        """Play the selected channel."""
-        # Reset previous active label
-        if self.current_channel and self.current_channel["url"] in self.channel_labels:
-            prev_label = self.channel_labels[self.current_channel["url"]]
-            prev_label.configure(bg="#16213e", fg="#cccccc")
-
-        self.current_channel = channel
-
-        # Highlight current
-        if channel["url"] in self.channel_labels:
-            self.channel_labels[channel["url"]].configure(bg="#e94560", fg="#ffffff")
-
-        # Hide placeholder
-        self.placeholder_label.place_forget()
-
-        # Play media
-        media = self.vlc_instance.media_new(channel["url"])
-        media.add_option(":network-caching=3000")
-        self.media_player.set_media(media)
-
-        # Embed video in the frame
-        self.root.update_idletasks()
-        handle = self.video_frame.winfo_id()
-        if sys.platform.startswith("linux"):
-            self.media_player.set_xwindow(handle)
-        elif sys.platform == "win32":
-            self.media_player.set_hwnd(handle)
-        elif sys.platform == "darwin":
-            self.media_player.set_nsobject(handle)
-
-        self.media_player.play()
-        self.media_player.audio_set_volume(self.volume_var.get())
-
-        self.now_playing_var.set(f"Now Playing: {channel['name']}")
-        self.status_var.set(f"Connecting to {channel['name']}...")
-
-    def _stop(self):
-        self.media_player.stop()
-        self.now_playing_var.set("No channel selected")
-        self.status_var.set("Stopped")
-        self.placeholder_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-
-        if self.current_channel and self.current_channel["url"] in self.channel_labels:
-            self.channel_labels[self.current_channel["url"]].configure(bg="#16213e", fg="#cccccc")
-        self.current_channel = None
-
-    def _toggle_mute(self):
-        is_muted = self.media_player.audio_get_mute()
-        self.media_player.audio_set_mute(not is_muted)
-        self.mute_btn.configure(text="Unmute" if not is_muted else "Mute")
-
-    def _toggle_fullscreen(self):
-        self.is_fullscreen = not self.is_fullscreen
-        self.root.attributes("-fullscreen", self.is_fullscreen)
-
-        if self.is_fullscreen:
-            self.sidebar_frame.pack_forget()
-            self.fullscreen_btn.configure(text="Exit FS")
-        else:
-            self.main_pane.forget(self.right_frame)
-            self.main_pane.add(self.sidebar_frame, weight=0)
-            self.main_pane.add(self.right_frame, weight=1)
-            self.fullscreen_btn.configure(text="Fullscreen")
-
-    def _on_volume_change(self, val):
-        self.media_player.audio_set_volume(int(val))
-
-    def _on_search(self, *args):
-        query = self.search_var.get().strip().lower()
-        if query == "" or query == "search channels...":
-            self._build_groups(self.channels)
-        else:
-            filtered = [ch for ch in self.channels if query in ch["name"].lower() or query in ch["group"].lower()]
-            self._build_groups(filtered)
-
-    def _on_search_focus_in(self, event):
-        if self.search_entry.get() == "Search channels...":
-            self.search_entry.delete(0, tk.END)
-            self.search_entry.configure(fg="#eaeaea")
-
-    def _on_search_focus_out(self, event):
-        if not self.search_entry.get():
-            self.search_entry.insert(0, "Search channels...")
-            self.search_entry.configure(fg="#666666")
-
-    def _on_mousewheel_up(self, event):
-        self.channel_canvas.yview_scroll(-3, "units")
-
-    def _on_mousewheel_down(self, event):
-        self.channel_canvas.yview_scroll(3, "units")
-
-    def _bind_events(self):
-        self.root.bind("<Escape>", lambda e: self._exit_fullscreen())
-        self.root.bind("<F11>", lambda e: self._toggle_fullscreen())
-        self.root.bind("<space>", lambda e: self._toggle_pause())
-        self.root.bind("<m>", lambda e: self._toggle_mute())
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    def _exit_fullscreen(self):
-        if self.is_fullscreen:
-            self._toggle_fullscreen()
-
-    def _toggle_pause(self):
-        if self.media_player.is_playing():
-            self.media_player.pause()
-            self.status_var.set("Paused")
-        else:
-            self.media_player.play()
-            if self.current_channel:
-                self.status_var.set(f"Playing: {self.current_channel['name']}")
-
-    def _update_ui(self):
-        """Periodic UI update."""
-        if self.media_player.is_playing() and self.current_channel:
-            self.status_var.set(f"Playing: {self.current_channel['name']}")
-        self.root.after(2000, self._update_ui)
-
-    def _on_close(self):
-        self.media_player.stop()
-        self.vlc_instance.release()
-        self.root.destroy()
+def build_html(channels):
+    """Build the full HTML player page with embedded channel data."""
+    channels_json = json.dumps(channels)
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IPTV Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#0f0f0f; color:#eaeaea; }
+
+#app { display:flex; height:100%%; }
+
+/* --- Sidebar --- */
+#sidebar { width:300px; min-width:240px; max-width:400px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; resize:horizontal; overflow:hidden; }
+#sidebar.hidden { display:none; }
+#sidebar-header { background:#0f3460; padding:14px 16px; text-align:center; }
+#sidebar-header h1 { color:#e94560; font-size:18px; font-weight:700; letter-spacing:1px; }
+#search-box { padding:8px 12px; background:#16213e; }
+#search-box input { width:100%%; padding:8px 12px; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px; color:#eaeaea; font-size:13px; outline:none; }
+#search-box input:focus { border-color:#e94560; }
+#search-box input::placeholder { color:#666; }
+#channel-list { flex:1; overflow-y:auto; overflow-x:hidden; }
+#channel-list::-webkit-scrollbar { width:6px; }
+#channel-list::-webkit-scrollbar-track { background:#16213e; }
+#channel-list::-webkit-scrollbar-thumb { background:#0f3460; border-radius:3px; }
+#channel-list::-webkit-scrollbar-thumb:hover { background:#e94560; }
+
+.group-header { background:#0f3460; padding:8px 14px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #16213e; user-select:none; }
+.group-header:hover { background:#133a6e; }
+.group-header .group-name { color:#e94560; font-weight:600; font-size:13px; }
+.group-header .group-count { color:#888; font-size:11px; }
+.group-header .arrow { color:#e94560; font-size:10px; transition:transform .2s; }
+.group-header.collapsed .arrow { transform:rotate(-90deg); }
+.group-channels { overflow:hidden; }
+.group-channels.collapsed { display:none; }
+
+.channel-item { padding:7px 14px 7px 24px; cursor:pointer; font-size:13px; color:#bbb; border-bottom:1px solid rgba(15,52,96,0.3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:background .15s, color .15s; }
+.channel-item:hover { background:#1a2744; color:#fff; }
+.channel-item.active { background:#e94560; color:#fff; font-weight:600; }
+
+/* --- Player area --- */
+#player-area { flex:1; display:flex; flex-direction:column; background:#000; min-width:0; }
+#video-container { flex:1; position:relative; background:#000; display:flex; align-items:center; justify-content:center; }
+#video-container video { width:100%%; height:100%%; object-fit:contain; background:#000; }
+#placeholder { position:absolute; color:#333; font-size:18px; pointer-events:none; }
+#placeholder.hidden { display:none; }
+#error-msg { position:absolute; color:#e94560; font-size:14px; text-align:center; padding:20px; display:none; }
+
+/* --- Controls --- */
+#controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; }
+#now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ctrl-btn { background:#0f3460; color:#eaeaea; border:none; padding:6px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; white-space:nowrap; }
+.ctrl-btn:hover { background:#1a4a8a; }
+.ctrl-btn.stop-btn { background:#e94560; }
+.ctrl-btn.stop-btn:hover { background:#c81e45; }
+#volume-slider { width:90px; accent-color:#e94560; cursor:pointer; }
+
+/* --- Status bar --- */
+#status-bar { background:#111; padding:4px 16px; font-size:11px; color:#555; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header"><h1>IPTV Player</h1></div>
+    <div id="search-box"><input type="text" id="search" placeholder="Search channels..."></div>
+    <div id="channel-list"></div>
+  </div>
+  <div id="player-area">
+    <div id="video-container">
+      <video id="video" autoplay></video>
+      <div id="placeholder">Select a channel to start watching</div>
+      <div id="error-msg"></div>
+    </div>
+    <div id="controls">
+      <span id="now-playing">No channel selected</span>
+      <input type="range" id="volume-slider" min="0" max="100" value="80" title="Volume">
+      <button class="ctrl-btn stop-btn" id="stop-btn">Stop</button>
+      <button class="ctrl-btn" id="mute-btn">Mute</button>
+      <button class="ctrl-btn" id="fs-btn">Fullscreen</button>
+    </div>
+    <div id="status-bar">Ready</div>
+  </div>
+</div>
+
+<script>
+const CHANNELS = """ + channels_json + """;
+
+let hls = null;
+let currentChannel = null;
+const video = document.getElementById('video');
+const placeholder = document.getElementById('placeholder');
+const errorMsg = document.getElementById('error-msg');
+const nowPlaying = document.getElementById('now-playing');
+const statusBar = document.getElementById('status-bar');
+const searchInput = document.getElementById('search');
+const channelList = document.getElementById('channel-list');
+const volumeSlider = document.getElementById('volume-slider');
+const sidebar = document.getElementById('sidebar');
+
+// Group channels
+function groupChannels(channels) {
+  const groups = {};
+  const order = [];
+  channels.forEach(ch => {
+    if (!groups[ch.group]) { groups[ch.group] = []; order.push(ch.group); }
+    groups[ch.group].push(ch);
+  });
+  return { groups, order };
+}
+
+// Render channel list
+function renderChannels(channels) {
+  channelList.innerHTML = '';
+  const { groups, order } = groupChannels(channels);
+  order.forEach(groupName => {
+    const chs = groups[groupName];
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    header.innerHTML = '<span class="group-name">' + escapeHtml(groupName) + '</span><span class="group-count">' + chs.length + '</span><span class="arrow">&#9660;</span>';
+    channelList.appendChild(header);
+
+    const container = document.createElement('div');
+    container.className = 'group-channels';
+    chs.forEach(ch => {
+      const item = document.createElement('div');
+      item.className = 'channel-item';
+      if (currentChannel && currentChannel.url === ch.url) item.classList.add('active');
+      item.textContent = ch.name;
+      item.title = ch.name;
+      item.addEventListener('click', () => playChannel(ch));
+      container.appendChild(item);
+    });
+    channelList.appendChild(container);
+
+    header.addEventListener('click', () => {
+      header.classList.toggle('collapsed');
+      container.classList.toggle('collapsed');
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+// Play a channel
+function playChannel(ch) {
+  errorMsg.style.display = 'none';
+  placeholder.classList.add('hidden');
+
+  // Destroy previous HLS instance
+  if (hls) { hls.destroy(); hls = null; }
+
+  currentChannel = ch;
+  nowPlaying.textContent = 'Now Playing: ' + ch.name;
+  statusBar.textContent = 'Connecting to ' + ch.name + '...';
+
+  // Re-highlight active
+  document.querySelectorAll('.channel-item').forEach(el => {
+    el.classList.toggle('active', el.textContent === ch.name);
+  });
+
+  if (Hls.isSupported()) {
+    hls = new Hls({
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      liveSyncDurationCount: 3,
+    });
+    hls.loadSource(ch.url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play();
+      video.volume = volumeSlider.value / 100;
+      statusBar.textContent = 'Playing: ' + ch.name;
+    });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        statusBar.textContent = 'Error: ' + data.type + ' - ' + data.details;
+        errorMsg.textContent = 'Failed to load stream: ' + data.details;
+        errorMsg.style.display = 'block';
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          setTimeout(() => { hls.startLoad(); statusBar.textContent = 'Retrying...'; }, 3000);
+        }
+      }
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Native HLS (Safari)
+    video.src = ch.url;
+    video.addEventListener('loadedmetadata', () => { video.play(); });
+    statusBar.textContent = 'Playing: ' + ch.name;
+  } else {
+    statusBar.textContent = 'Error: HLS not supported in this browser engine';
+    errorMsg.textContent = 'HLS playback is not supported.';
+    errorMsg.style.display = 'block';
+  }
+}
+
+// Stop
+document.getElementById('stop-btn').addEventListener('click', () => {
+  if (hls) { hls.destroy(); hls = null; }
+  video.src = '';
+  currentChannel = null;
+  nowPlaying.textContent = 'No channel selected';
+  statusBar.textContent = 'Stopped';
+  placeholder.classList.remove('hidden');
+  errorMsg.style.display = 'none';
+  document.querySelectorAll('.channel-item.active').forEach(el => el.classList.remove('active'));
+});
+
+// Mute
+const muteBtn = document.getElementById('mute-btn');
+muteBtn.addEventListener('click', () => {
+  video.muted = !video.muted;
+  muteBtn.textContent = video.muted ? 'Unmute' : 'Mute';
+});
+
+// Volume
+volumeSlider.addEventListener('input', () => { video.volume = volumeSlider.value / 100; });
+
+// Fullscreen
+document.getElementById('fs-btn').addEventListener('click', () => {
+  const el = document.getElementById('player-area');
+  if (!document.fullscreenElement) {
+    el.requestFullscreen().catch(() => {});
+    sidebar.classList.add('hidden');
+  } else {
+    document.exitFullscreen();
+    sidebar.classList.remove('hidden');
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) sidebar.classList.remove('hidden');
+});
+
+// Search
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { renderChannels(CHANNELS); return; }
+  renderChannels(CHANNELS.filter(ch => ch.name.toLowerCase().includes(q) || ch.group.toLowerCase().includes(q)));
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === ' ' || e.key === 'k') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+  if (e.key === 'm') { video.muted = !video.muted; muteBtn.textContent = video.muted ? 'Unmute' : 'Mute'; }
+  if (e.key === 'f') { document.getElementById('fs-btn').click(); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); volumeSlider.value = Math.min(100, +volumeSlider.value + 5); video.volume = volumeSlider.value / 100; }
+  if (e.key === 'ArrowDown') { e.preventDefault(); volumeSlider.value = Math.max(0, +volumeSlider.value - 5); video.volume = volumeSlider.value / 100; }
+});
+
+// Init
+renderChannels(CHANNELS);
+</script>
+</body>
+</html>"""
 
 
 def main():
@@ -584,9 +317,15 @@ def main():
 
     print(f"Loaded {len(channels)} channels.")
 
-    root = tk.Tk()
-    IPTVPlayer(root, channels)
-    root.mainloop()
+    html = build_html(channels)
+    window = webview.create_window(
+        "IPTV Player",
+        html=html,
+        width=1200,
+        height=700,
+        min_size=(900, 500),
+    )
+    webview.start()
 
 
 if __name__ == "__main__":
