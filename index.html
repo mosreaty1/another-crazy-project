@@ -7,17 +7,16 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html, body { height:100%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#0f0f0f; color:#eaeaea; }
+html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#0f0f0f; color:#eaeaea; }
 
 #app { display:flex; height:100vh; }
 
-/* --- Sidebar --- */
 #sidebar { width:300px; min-width:240px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; flex-shrink:0; }
 #sidebar.hidden { display:none; }
 #sidebar-header { background:#0f3460; padding:14px 16px; text-align:center; }
 #sidebar-header h1 { color:#e94560; font-size:18px; font-weight:700; letter-spacing:1px; }
 #search-box { padding:8px 12px; background:#16213e; }
-#search-box input { width:100%; padding:8px 12px; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px; color:#eaeaea; font-size:13px; outline:none; }
+#search-box input { width:100%%; padding:8px 12px; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px; color:#eaeaea; font-size:13px; outline:none; }
 #search-box input:focus { border-color:#e94560; }
 #search-box input::placeholder { color:#666; }
 #channel-list { flex:1; overflow-y:auto; overflow-x:hidden; }
@@ -39,15 +38,13 @@ html, body { height:100%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,
 .channel-item:hover { background:#1a2744; color:#fff; }
 .channel-item.active { background:#e94560; color:#fff; font-weight:600; }
 
-/* --- Player area --- */
 #player-area { flex:1; display:flex; flex-direction:column; background:#000; min-width:0; }
 #video-container { flex:1; position:relative; background:#000; display:flex; align-items:center; justify-content:center; }
-#video-container video { width:100%; height:100%; object-fit:contain; background:#000; }
+#video-container video { width:100%%; height:100%%; object-fit:contain; background:#000; }
 #placeholder { position:absolute; color:#333; font-size:18px; pointer-events:none; }
 #placeholder.hidden { display:none; }
 #error-msg { position:absolute; color:#e94560; font-size:14px; text-align:center; padding:20px; display:none; }
 
-/* --- Controls --- */
 #controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; flex-wrap:wrap; }
 #now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:120px; }
 .ctrl-btn { background:#0f3460; color:#eaeaea; border:none; padding:6px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; white-space:nowrap; }
@@ -56,7 +53,6 @@ html, body { height:100%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,
 .ctrl-btn.stop-btn:hover { background:#c81e45; }
 #volume-slider { width:90px; accent-color:#e94560; cursor:pointer; }
 
-/* --- Status bar --- */
 #status-bar { background:#111; padding:4px 16px; font-size:11px; color:#555; }
 </style>
 </head>
@@ -159,7 +155,11 @@ function playChannel(ch) {
   });
 
   if (Hls.isSupported()) {
-    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, liveSyncDurationCount: 3 });
+    hls = new Hls({
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      liveSyncDurationCount: 3,
+    });
     hls.loadSource(ch.url);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {

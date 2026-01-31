@@ -2,7 +2,10 @@
 """
 IPTV Desktop Player
 Zero dependencies - uses only Python standard library + your web browser.
-Run: python iptv_player.py
+
+Local:      python iptv_player.py
+Build HTML: python iptv_player.py --build
+Deploy:     push to Render/Railway, set start command: python iptv_player.py
 """
 
 import json
@@ -13,6 +16,9 @@ import sys
 import threading
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs, unquote
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 
 def parse_m3u(filepath):
@@ -41,9 +47,17 @@ def parse_m3u(filepath):
     return channels
 
 
-def build_html(channels):
+def build_html(channels, use_proxy=False):
     """Build the full HTML player page with embedded channel data."""
     channels_json = json.dumps(channels)
+    proxy_js = ""
+    if use_proxy:
+        proxy_js = """
+    // Route ALL hls.js requests through our /proxy endpoint
+    xhrSetup: function(xhr, url) {
+      xhr.open('GET', '/proxy?url=' + encodeURIComponent(url), true);
+    },"""
+
     return ("""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -57,7 +71,6 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 
 #app { display:flex; height:100vh; }
 
-/* --- Sidebar --- */
 #sidebar { width:300px; min-width:240px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; flex-shrink:0; }
 #sidebar.hidden { display:none; }
 #sidebar-header { background:#0f3460; padding:14px 16px; text-align:center; }
@@ -85,7 +98,6 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 .channel-item:hover { background:#1a2744; color:#fff; }
 .channel-item.active { background:#e94560; color:#fff; font-weight:600; }
 
-/* --- Player area --- */
 #player-area { flex:1; display:flex; flex-direction:column; background:#000; min-width:0; }
 #video-container { flex:1; position:relative; background:#000; display:flex; align-items:center; justify-content:center; }
 #video-container video { width:100%%; height:100%%; object-fit:contain; background:#000; }
@@ -93,7 +105,6 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 #placeholder.hidden { display:none; }
 #error-msg { position:absolute; color:#e94560; font-size:14px; text-align:center; padding:20px; display:none; }
 
-/* --- Controls --- */
 #controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; flex-wrap:wrap; }
 #now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:120px; }
 .ctrl-btn { background:#0f3460; color:#eaeaea; border:none; padding:6px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; white-space:nowrap; }
@@ -102,7 +113,6 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 .ctrl-btn.stop-btn:hover { background:#c81e45; }
 #volume-slider { width:90px; accent-color:#e94560; cursor:pointer; }
 
-/* --- Status bar --- */
 #status-bar { background:#111; padding:4px 16px; font-size:11px; color:#555; }
 </style>
 </head>
@@ -131,7 +141,7 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 </div>
 
 <script>
-const CHANNELS = %s;
+const CHANNELS = """ + channels_json + """;
 
 let hls = null;
 let currentChannel = null;
@@ -205,7 +215,11 @@ function playChannel(ch) {
   });
 
   if (Hls.isSupported()) {
-    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, liveSyncDurationCount: 3 });
+    hls = new Hls({
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      liveSyncDurationCount: 3,""" + proxy_js + """
+    });
     hls.loadSource(ch.url);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -279,7 +293,10 @@ document.addEventListener('keydown', e => {
 renderChannels(CHANNELS);
 </script>
 </body>
-</html>""" % channels_json)
+</html>""")
+
+
+ALLOWED_HOSTS = {"maveniptv.net", "maventv.one"}
 
 
 def find_free_port():
@@ -290,19 +307,58 @@ def find_free_port():
 
 
 def make_handler(html_content):
-    """Create an HTTP request handler that serves the player HTML."""
+    """Create an HTTP request handler that serves HTML and proxies streams."""
     html_bytes = html_content.encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path.startswith("/proxy"):
+                self._handle_proxy()
+            else:
+                self._serve_html()
+
+        def _serve_html(self):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html_bytes)))
             self.end_headers()
             self.wfile.write(html_bytes)
 
+        def _handle_proxy(self):
+            parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
+            target_url = params.get("url", [None])[0]
+            if not target_url:
+                self.send_error(400, "Missing url parameter")
+                return
+
+            target_url = unquote(target_url)
+
+            # Only allow proxying to known IPTV hosts
+            target_host = urlparse(target_url).hostname
+            if target_host not in ALLOWED_HOSTS:
+                self.send_error(403, "Host not allowed")
+                return
+
+            try:
+                req = Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = urlopen(req, timeout=15)
+                data = resp.read()
+
+                content_type = resp.headers.get("Content-Type", "application/octet-stream")
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except URLError as e:
+                self.send_error(502, f"Upstream error: {e}")
+            except Exception as e:
+                self.send_error(500, f"Proxy error: {e}")
+
         def log_message(self, format, *args):
-            pass  # Suppress server logs
+            pass
 
     return Handler
 
@@ -319,28 +375,39 @@ def main():
         print("No channels found in playlist.")
         sys.exit(1)
 
-    html = build_html(channels)
-
-    # --build flag: export static index.html for deployment
+    # --build: export static HTML (no proxy, for local file:// use only)
     if "--build" in sys.argv:
+        html = build_html(channels, use_proxy=False)
         out_path = os.path.join(script_dir, "index.html")
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"Built {len(channels)} channels into: {out_path}")
-        print("Deploy this single file to any static hosting (GitHub Pages, Netlify, Vercel, etc.)")
         return
 
-    port = find_free_port()
-    handler = make_handler(html)
-    server = HTTPServer(("127.0.0.1", port), handler)
+    # Server mode: proxy enabled
+    html = build_html(channels, use_proxy=True)
 
-    url = f"http://127.0.0.1:{port}"
+    # Use PORT env var for deployment platforms (Render, Railway, etc.)
+    env_port = os.environ.get("PORT")
+    if env_port:
+        host = "0.0.0.0"
+        port = int(env_port)
+        is_deploy = True
+    else:
+        host = "127.0.0.1"
+        port = find_free_port()
+        is_deploy = False
+
+    handler = make_handler(html)
+    server = HTTPServer((host, port), handler)
+
     print(f"Loaded {len(channels)} channels.")
-    print(f"IPTV Player running at: {url}")
+    print(f"IPTV Player running at: http://{host}:{port}")
     print("Press Ctrl+C to stop.")
     print()
 
-    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    if not is_deploy:
+        threading.Timer(0.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
 
     try:
         server.serve_forever()
