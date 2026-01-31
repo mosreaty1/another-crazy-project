@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""IPTV Desktop Player - uses pywebview + hls.js. No VLC needed."""
+"""
+IPTV Desktop Player
+Zero dependencies - uses only Python standard library + your web browser.
+Run: python iptv_player.py
+"""
 
 import json
 import os
 import re
+import socket
 import sys
-
-try:
-    import webview
-except ImportError:
-    print("ERROR: pywebview is required. Install with: pip install pywebview")
-    sys.exit(1)
+import threading
+import webbrowser
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 def parse_m3u(filepath):
@@ -42,7 +44,7 @@ def parse_m3u(filepath):
 def build_html(channels):
     """Build the full HTML player page with embedded channel data."""
     channels_json = json.dumps(channels)
-    return """<!DOCTYPE html>
+    return ("""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -53,10 +55,10 @@ def build_html(channels):
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#0f0f0f; color:#eaeaea; }
 
-#app { display:flex; height:100%%; }
+#app { display:flex; height:100vh; }
 
 /* --- Sidebar --- */
-#sidebar { width:300px; min-width:240px; max-width:400px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; resize:horizontal; overflow:hidden; }
+#sidebar { width:300px; min-width:240px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; flex-shrink:0; }
 #sidebar.hidden { display:none; }
 #sidebar-header { background:#0f3460; padding:14px 16px; text-align:center; }
 #sidebar-header h1 { color:#e94560; font-size:18px; font-weight:700; letter-spacing:1px; }
@@ -73,7 +75,7 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 .group-header { background:#0f3460; padding:8px 14px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #16213e; user-select:none; }
 .group-header:hover { background:#133a6e; }
 .group-header .group-name { color:#e94560; font-weight:600; font-size:13px; }
-.group-header .group-count { color:#888; font-size:11px; }
+.group-header .group-count { color:#888; font-size:11px; margin:0 8px; }
 .group-header .arrow { color:#e94560; font-size:10px; transition:transform .2s; }
 .group-header.collapsed .arrow { transform:rotate(-90deg); }
 .group-channels { overflow:hidden; }
@@ -92,8 +94,8 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 #error-msg { position:absolute; color:#e94560; font-size:14px; text-align:center; padding:20px; display:none; }
 
 /* --- Controls --- */
-#controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; }
-#now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; flex-wrap:wrap; }
+#now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:120px; }
 .ctrl-btn { background:#0f3460; color:#eaeaea; border:none; padding:6px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; white-space:nowrap; }
 .ctrl-btn:hover { background:#1a4a8a; }
 .ctrl-btn.stop-btn { background:#e94560; }
@@ -129,7 +131,7 @@ html, body { height:100%%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva
 </div>
 
 <script>
-const CHANNELS = """ + channels_json + """;
+const CHANNELS = %s;
 
 let hls = null;
 let currentChannel = null;
@@ -143,7 +145,6 @@ const channelList = document.getElementById('channel-list');
 const volumeSlider = document.getElementById('volume-slider');
 const sidebar = document.getElementById('sidebar');
 
-// Group channels
 function groupChannels(channels) {
   const groups = {};
   const order = [];
@@ -154,7 +155,6 @@ function groupChannels(channels) {
   return { groups, order };
 }
 
-// Render channel list
 function renderChannels(channels) {
   channelList.innerHTML = '';
   const { groups, order } = groupChannels(channels);
@@ -191,29 +191,21 @@ function escapeHtml(text) {
   return d.innerHTML;
 }
 
-// Play a channel
 function playChannel(ch) {
   errorMsg.style.display = 'none';
   placeholder.classList.add('hidden');
-
-  // Destroy previous HLS instance
   if (hls) { hls.destroy(); hls = null; }
 
   currentChannel = ch;
   nowPlaying.textContent = 'Now Playing: ' + ch.name;
   statusBar.textContent = 'Connecting to ' + ch.name + '...';
 
-  // Re-highlight active
   document.querySelectorAll('.channel-item').forEach(el => {
     el.classList.toggle('active', el.textContent === ch.name);
   });
 
   if (Hls.isSupported()) {
-    hls = new Hls({
-      maxBufferLength: 30,
-      maxMaxBufferLength: 60,
-      liveSyncDurationCount: 3,
-    });
+    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, liveSyncDurationCount: 3 });
     hls.loadSource(ch.url);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -227,23 +219,21 @@ function playChannel(ch) {
         errorMsg.textContent = 'Failed to load stream: ' + data.details;
         errorMsg.style.display = 'block';
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          setTimeout(() => { hls.startLoad(); statusBar.textContent = 'Retrying...'; }, 3000);
+          setTimeout(() => { if (hls) { hls.startLoad(); statusBar.textContent = 'Retrying...'; } }, 3000);
         }
       }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    // Native HLS (Safari)
     video.src = ch.url;
     video.addEventListener('loadedmetadata', () => { video.play(); });
     statusBar.textContent = 'Playing: ' + ch.name;
   } else {
-    statusBar.textContent = 'Error: HLS not supported in this browser engine';
-    errorMsg.textContent = 'HLS playback is not supported.';
+    statusBar.textContent = 'HLS not supported';
+    errorMsg.textContent = 'HLS playback is not supported in this browser.';
     errorMsg.style.display = 'block';
   }
 }
 
-// Stop
 document.getElementById('stop-btn').addEventListener('click', () => {
   if (hls) { hls.destroy(); hls = null; }
   video.src = '';
@@ -255,39 +245,28 @@ document.getElementById('stop-btn').addEventListener('click', () => {
   document.querySelectorAll('.channel-item.active').forEach(el => el.classList.remove('active'));
 });
 
-// Mute
 const muteBtn = document.getElementById('mute-btn');
 muteBtn.addEventListener('click', () => {
   video.muted = !video.muted;
   muteBtn.textContent = video.muted ? 'Unmute' : 'Mute';
 });
 
-// Volume
 volumeSlider.addEventListener('input', () => { video.volume = volumeSlider.value / 100; });
 
-// Fullscreen
 document.getElementById('fs-btn').addEventListener('click', () => {
-  const el = document.getElementById('player-area');
   if (!document.fullscreenElement) {
-    el.requestFullscreen().catch(() => {});
-    sidebar.classList.add('hidden');
+    document.documentElement.requestFullscreen().catch(() => {});
   } else {
     document.exitFullscreen();
-    sidebar.classList.remove('hidden');
   }
 });
-document.addEventListener('fullscreenchange', () => {
-  if (!document.fullscreenElement) sidebar.classList.remove('hidden');
-});
 
-// Search
 searchInput.addEventListener('input', () => {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { renderChannels(CHANNELS); return; }
   renderChannels(CHANNELS.filter(ch => ch.name.toLowerCase().includes(q) || ch.group.toLowerCase().includes(q)));
 });
 
-// Keyboard shortcuts
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === ' ' || e.key === 'k') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
@@ -297,11 +276,35 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowDown') { e.preventDefault(); volumeSlider.value = Math.max(0, +volumeSlider.value - 5); video.volume = volumeSlider.value / 100; }
 });
 
-// Init
 renderChannels(CHANNELS);
 </script>
 </body>
-</html>"""
+</html>""" % channels_json)
+
+
+def find_free_port():
+    """Find a free TCP port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def make_handler(html_content):
+    """Create an HTTP request handler that serves the player HTML."""
+    html_bytes = html_content.encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html_bytes)))
+            self.end_headers()
+            self.wfile.write(html_bytes)
+
+        def log_message(self, format, *args):
+            pass  # Suppress server logs
+
+    return Handler
 
 
 def main():
@@ -315,17 +318,25 @@ def main():
         print("No channels found in playlist.")
         sys.exit(1)
 
-    print(f"Loaded {len(channels)} channels.")
-
+    port = find_free_port()
     html = build_html(channels)
-    window = webview.create_window(
-        "IPTV Player",
-        html=html,
-        width=1200,
-        height=700,
-        min_size=(900, 500),
-    )
-    webview.start()
+    handler = make_handler(html)
+    server = HTTPServer(("127.0.0.1", port), handler)
+
+    url = f"http://127.0.0.1:{port}"
+    print(f"Loaded {len(channels)} channels.")
+    print(f"IPTV Player running at: {url}")
+    print("Press Ctrl+C to stop.")
+    print()
+
+    # Open browser after a short delay so the server is ready
+    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.shutdown()
 
 
 if __name__ == "__main__":

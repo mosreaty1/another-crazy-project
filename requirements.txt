@@ -1,1 +1,3 @@
-pywebview>=4.0
+# No pip dependencies required!
+# This app uses only the Python standard library.
+# Just run: python iptv_player.py
