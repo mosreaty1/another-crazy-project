@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """IPTV Desktop Player - A Python desktop application for playing IPTV channels."""
 
+import ctypes
 import os
 import re
 import sys
@@ -8,11 +9,47 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from collections import OrderedDict
 
+
+def _find_vlc_windows():
+    """Locate VLC installation on Windows and add it to DLL search paths."""
+    if sys.platform != "win32":
+        return
+    candidates = [
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "VideoLAN", "VLC"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "VideoLAN", "VLC"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "VideoLAN", "VLC"),
+    ]
+    # Also check if user set a custom path via environment variable
+    env_path = os.environ.get("VLC_PATH", "")
+    if env_path:
+        candidates.insert(0, env_path)
+
+    for path in candidates:
+        if path and os.path.isfile(os.path.join(path, "libvlc.dll")):
+            os.environ["PYTHON_VLC_MODULE_PATH"] = path
+            os.environ["PATH"] = path + ";" + os.environ.get("PATH", "")
+            try:
+                os.add_dll_directory(path)
+            except (OSError, AttributeError):
+                pass
+            return
+    print("WARNING: Could not find VLC installation automatically.")
+    print("Install VLC from https://www.videolan.org/vlc/ or set VLC_PATH environment variable.")
+
+
+_find_vlc_windows()
+
 try:
     import vlc
-except ImportError:
-    print("ERROR: python-vlc is required. Install it with: pip install python-vlc")
-    print("You also need VLC media player installed on your system.")
+except (ImportError, FileNotFoundError, OSError) as e:
+    print(f"ERROR: Could not load VLC: {e}")
+    print()
+    print("Make sure you have:")
+    print("  1. VLC media player installed (https://www.videolan.org/vlc/)")
+    print("  2. python-vlc package: pip install python-vlc")
+    print()
+    print("On Windows, VLC must be the same architecture as Python (both 64-bit or both 32-bit).")
+    print("You can also set VLC_PATH=C:\\path\\to\\VLC before running.")
     sys.exit(1)
 
 
