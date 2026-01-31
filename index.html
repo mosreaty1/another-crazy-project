@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IPTV Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#0f0f0f; color:#eaeaea; }
+
+#app { display:flex; height:100vh; }
+
+/* --- Sidebar --- */
+#sidebar { width:300px; min-width:240px; background:#16213e; display:flex; flex-direction:column; border-right:1px solid #0f3460; flex-shrink:0; }
+#sidebar.hidden { display:none; }
+#sidebar-header { background:#0f3460; padding:14px 16px; text-align:center; }
+#sidebar-header h1 { color:#e94560; font-size:18px; font-weight:700; letter-spacing:1px; }
+#search-box { padding:8px 12px; background:#16213e; }
+#search-box input { width:100%; padding:8px 12px; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px; color:#eaeaea; font-size:13px; outline:none; }
+#search-box input:focus { border-color:#e94560; }
+#search-box input::placeholder { color:#666; }
+#channel-list { flex:1; overflow-y:auto; overflow-x:hidden; }
+#channel-list::-webkit-scrollbar { width:6px; }
+#channel-list::-webkit-scrollbar-track { background:#16213e; }
+#channel-list::-webkit-scrollbar-thumb { background:#0f3460; border-radius:3px; }
+#channel-list::-webkit-scrollbar-thumb:hover { background:#e94560; }
+
+.group-header { background:#0f3460; padding:8px 14px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #16213e; user-select:none; }
+.group-header:hover { background:#133a6e; }
+.group-header .group-name { color:#e94560; font-weight:600; font-size:13px; }
+.group-header .group-count { color:#888; font-size:11px; margin:0 8px; }
+.group-header .arrow { color:#e94560; font-size:10px; transition:transform .2s; }
+.group-header.collapsed .arrow { transform:rotate(-90deg); }
+.group-channels { overflow:hidden; }
+.group-channels.collapsed { display:none; }
+
+.channel-item { padding:7px 14px 7px 24px; cursor:pointer; font-size:13px; color:#bbb; border-bottom:1px solid rgba(15,52,96,0.3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:background .15s, color .15s; }
+.channel-item:hover { background:#1a2744; color:#fff; }
+.channel-item.active { background:#e94560; color:#fff; font-weight:600; }
+
+/* --- Player area --- */
+#player-area { flex:1; display:flex; flex-direction:column; background:#000; min-width:0; }
+#video-container { flex:1; position:relative; background:#000; display:flex; align-items:center; justify-content:center; }
+#video-container video { width:100%; height:100%; object-fit:contain; background:#000; }
+#placeholder { position:absolute; color:#333; font-size:18px; pointer-events:none; }
+#placeholder.hidden { display:none; }
+#error-msg { position:absolute; color:#e94560; font-size:14px; text-align:center; padding:20px; display:none; }
+
+/* --- Controls --- */
+#controls { background:#1a1a2e; padding:10px 16px; display:flex; align-items:center; gap:12px; border-top:1px solid #0f3460; flex-wrap:wrap; }
+#now-playing { flex:1; font-size:13px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:120px; }
+.ctrl-btn { background:#0f3460; color:#eaeaea; border:none; padding:6px 14px; border-radius:4px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; white-space:nowrap; }
+.ctrl-btn:hover { background:#1a4a8a; }
+.ctrl-btn.stop-btn { background:#e94560; }
+.ctrl-btn.stop-btn:hover { background:#c81e45; }
+#volume-slider { width:90px; accent-color:#e94560; cursor:pointer; }
+
+/* --- Status bar --- */
+#status-bar { background:#111; padding:4px 16px; font-size:11px; color:#555; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header"><h1>IPTV Player</h1></div>
+    <div id="search-box"><input type="text" id="search" placeholder="Search channels..."></div>
+    <div id="channel-list"></div>
+  </div>
+  <div id="player-area">
+    <div id="video-container">
+      <video id="video" autoplay></video>
+      <div id="placeholder">Select a channel to start watching</div>
+      <div id="error-msg"></div>
+    </div>
+    <div id="controls">
+      <span id="now-playing">No channel selected</span>
+      <input type="range" id="volume-slider" min="0" max="100" value="80" title="Volume">
+      <button class="ctrl-btn stop-btn" id="stop-btn">Stop</button>
+      <button class="ctrl-btn" id="mute-btn">Mute</button>
+      <button class="ctrl-btn" id="fs-btn">Fullscreen</button>
+    </div>
+    <div id="status-bar">Ready</div>
+  </div>
+</div>
+
+<script>
+const CHANNELS = [{"name": "Update file available at IPTV442WEB", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61321.m3u8", "group": "Ungrouped", "logo": ""}, {"name": "beIN IPTV442WEB 1 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64689.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64690.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64694.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64695.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "http://maventv.one:8080/images/lsN-IAqck0z2FWt8wek5MnAlgNV5cF_aFFnYfnhifNJwcaN7k2i_ajNKJTIJnfSnaSMXkKA6VCmuSOGYzQlefqK3h271t6GmT0SmQgji3Jc.png"}, {"name": "beIN IPTV442WEB 5 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64696.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64697.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64698.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64699.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/64700.m3u8", "group": "beIN IPTV442WEB MINI", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN IPTV442WEB 1 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61321.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61322.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61324.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61325.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 5 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61326.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61327.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61328.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61329.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/61330.m3u8", "group": "beIN IPTV442WEB LOW", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN IPTV442WEB 1 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78403.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78404.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78406.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78407.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 5 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78408.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78409.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78410.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78411.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 VEGA", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78412.m3u8", "group": "beIN IPTV442WEB VEGA", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN IPTV442WEB 1 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40199.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40200.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48477.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48478.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 5 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48479.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48480.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48481.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48482.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/48483.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN Global SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/358214.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/bein_IPTV442WEB_FTA_DIGITAL_Mono.png"}, {"name": "beIN News SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/358217.m3u8", "group": "beIN IPTV442WEB SD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/NEWS_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 1 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40215.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40216.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40218.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40219.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 5 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40220.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40221.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40222.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40223.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/40224.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN Global HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/256951.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/bein_IPTV442WEB_FTA_DIGITAL_Mono.png"}, {"name": "beIN News HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/256952.m3u8", "group": "beIN IPTV442WEB HD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/NEWS_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 1 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10421.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 2 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10422.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 3 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10424.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10425.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 5 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10426.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 6 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10427.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 7 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10428.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 8 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10429.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 9 FHD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/10430.m3u8", "group": "beIN IPTV442WEB FHD", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN IPTV442WEB 4K 1", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78395.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB1_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 2", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78394.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB2_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 3", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78402.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB3_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 4", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78401.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB4_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 5", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78400.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB5_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 6", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78399.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2021/02/beIN_IPTV442WEB6_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 7", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78398.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/beIN_IPTV442WEB7_DIGITAL_Mono.png"}, {"name": "beIN IPTV442WEB 4K 8", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78397.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB8.png"}, {"name": "beIN IPTV442WEB 4K 9", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/78396.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2023/09/logos-_beINIPTV442WEB9.png"}, {"name": "beIN Global 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/358220.m3u8", "group": "beIN IPTV442WEB 4K", "logo": "https://assets.bein.com/mena/sites/4/2015/06/bein_IPTV442WEB_FTA_DIGITAL_Mono.png"}, {"name": "ALWAN SPORT 1 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310518.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 2 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310519.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 3 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310520.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 4 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310521.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 5 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310522.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 6 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310523.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 7 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/334435.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 8 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/334438.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 9 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/334441.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 10 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/334444.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 1 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284609.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 2 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284606.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 3 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284603.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 4 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284600.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 5 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284597.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 6 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/284594.m3u8", "group": "ALWAN IPTV442WEB SD|HD", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 1 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310487.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 2 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310488.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 3 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310489.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 4 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310490.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 5 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310491.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "ALWAN SPORT 6 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/310492.m3u8", "group": "ALWAN IPTV442WEB 4K", "logo": "https://up6.cc/2025/08/175619242952131.png"}, {"name": "STARZPLAY IPTV442WEB 1 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/239108.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184783471.png"}, {"name": "STARZPLAY IPTV442WEB 2 MINI", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/239107.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184788242.png"}, {"name": "STARZPLAY IPTV442WEB 1 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/177222.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184783471.png"}, {"name": "STARZPLAY IPTV442WEB 2 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/177221.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184788242.png"}, {"name": "STARZPLAY IPTV442WEB 1 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/130469.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184783471.png"}, {"name": "STARZPLAY IPTV442WEB 2 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/130470.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184788242.png"}, {"name": "STARZPLAY IPTV442WEB 1 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/124566.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184783471.png"}, {"name": "STARZPLAY IPTV442WEB 2 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/124565.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184788242.png"}, {"name": "STARZPLAY IPTV442WEB 1 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/203554.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184783471.png"}, {"name": "STARZPLAY IPTV442WEB 2 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/203553.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://up6.cc/2025/08/175598184788242.png"}, {"name": "STARZPLAY IPTV442WEB 3 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/247647.m3u8", "group": "STARZPLAY IPTV442WEB", "logo": "https://starzplay-img-prod-ssl.akamaized.net/prd-peg-data/default/images/logos/live/v2/starzplayIPTV442WEB-active.svg"}, {"name": "THMANYAH 1 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283443.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 2 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283446.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 3 LOW", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283449.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 1 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283452.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 2 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283455.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 3 SD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283458.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 1 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283461.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 2 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283464.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 3 HD", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283467.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 1 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283470.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 2 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283473.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}, {"name": "THMANYAH 3 4K", "url": "http://maveniptv.net:80/live/ahmedELmetwally85/ah8759946/283476.m3u8", "group": "THMANYAH IPTV442WEB", "logo": "https://up6.cc/2025/08/175526238688121.png"}];
+
+let hls = null;
+let currentChannel = null;
+const video = document.getElementById('video');
+const placeholder = document.getElementById('placeholder');
+const errorMsg = document.getElementById('error-msg');
+const nowPlaying = document.getElementById('now-playing');
+const statusBar = document.getElementById('status-bar');
+const searchInput = document.getElementById('search');
+const channelList = document.getElementById('channel-list');
+const volumeSlider = document.getElementById('volume-slider');
+const sidebar = document.getElementById('sidebar');
+
+function groupChannels(channels) {
+  const groups = {};
+  const order = [];
+  channels.forEach(ch => {
+    if (!groups[ch.group]) { groups[ch.group] = []; order.push(ch.group); }
+    groups[ch.group].push(ch);
+  });
+  return { groups, order };
+}
+
+function renderChannels(channels) {
+  channelList.innerHTML = '';
+  const { groups, order } = groupChannels(channels);
+  order.forEach(groupName => {
+    const chs = groups[groupName];
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    header.innerHTML = '<span class="group-name">' + escapeHtml(groupName) + '</span><span class="group-count">' + chs.length + '</span><span class="arrow">&#9660;</span>';
+    channelList.appendChild(header);
+
+    const container = document.createElement('div');
+    container.className = 'group-channels';
+    chs.forEach(ch => {
+      const item = document.createElement('div');
+      item.className = 'channel-item';
+      if (currentChannel && currentChannel.url === ch.url) item.classList.add('active');
+      item.textContent = ch.name;
+      item.title = ch.name;
+      item.addEventListener('click', () => playChannel(ch));
+      container.appendChild(item);
+    });
+    channelList.appendChild(container);
+
+    header.addEventListener('click', () => {
+      header.classList.toggle('collapsed');
+      container.classList.toggle('collapsed');
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function playChannel(ch) {
+  errorMsg.style.display = 'none';
+  placeholder.classList.add('hidden');
+  if (hls) { hls.destroy(); hls = null; }
+
+  currentChannel = ch;
+  nowPlaying.textContent = 'Now Playing: ' + ch.name;
+  statusBar.textContent = 'Connecting to ' + ch.name + '...';
+
+  document.querySelectorAll('.channel-item').forEach(el => {
+    el.classList.toggle('active', el.textContent === ch.name);
+  });
+
+  if (Hls.isSupported()) {
+    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, liveSyncDurationCount: 3 });
+    hls.loadSource(ch.url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play();
+      video.volume = volumeSlider.value / 100;
+      statusBar.textContent = 'Playing: ' + ch.name;
+    });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        statusBar.textContent = 'Error: ' + data.type + ' - ' + data.details;
+        errorMsg.textContent = 'Failed to load stream: ' + data.details;
+        errorMsg.style.display = 'block';
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          setTimeout(() => { if (hls) { hls.startLoad(); statusBar.textContent = 'Retrying...'; } }, 3000);
+        }
+      }
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = ch.url;
+    video.addEventListener('loadedmetadata', () => { video.play(); });
+    statusBar.textContent = 'Playing: ' + ch.name;
+  } else {
+    statusBar.textContent = 'HLS not supported';
+    errorMsg.textContent = 'HLS playback is not supported in this browser.';
+    errorMsg.style.display = 'block';
+  }
+}
+
+document.getElementById('stop-btn').addEventListener('click', () => {
+  if (hls) { hls.destroy(); hls = null; }
+  video.src = '';
+  currentChannel = null;
+  nowPlaying.textContent = 'No channel selected';
+  statusBar.textContent = 'Stopped';
+  placeholder.classList.remove('hidden');
+  errorMsg.style.display = 'none';
+  document.querySelectorAll('.channel-item.active').forEach(el => el.classList.remove('active'));
+});
+
+const muteBtn = document.getElementById('mute-btn');
+muteBtn.addEventListener('click', () => {
+  video.muted = !video.muted;
+  muteBtn.textContent = video.muted ? 'Unmute' : 'Mute';
+});
+
+volumeSlider.addEventListener('input', () => { video.volume = volumeSlider.value / 100; });
+
+document.getElementById('fs-btn').addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { renderChannels(CHANNELS); return; }
+  renderChannels(CHANNELS.filter(ch => ch.name.toLowerCase().includes(q) || ch.group.toLowerCase().includes(q)));
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === ' ' || e.key === 'k') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+  if (e.key === 'm') { video.muted = !video.muted; muteBtn.textContent = video.muted ? 'Unmute' : 'Mute'; }
+  if (e.key === 'f') { document.getElementById('fs-btn').click(); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); volumeSlider.value = Math.min(100, +volumeSlider.value + 5); video.volume = volumeSlider.value / 100; }
+  if (e.key === 'ArrowDown') { e.preventDefault(); volumeSlider.value = Math.max(0, +volumeSlider.value - 5); video.volume = volumeSlider.value / 100; }
+});
+
+renderChannels(CHANNELS);
+</script>
+</body>
+</html>

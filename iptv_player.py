@@ -308,7 +308,8 @@ def make_handler(html_content):
 
 
 def main():
-    playlist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "playlist.m3u")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    playlist_path = os.path.join(script_dir, "playlist.m3u")
     if not os.path.exists(playlist_path):
         print(f"Playlist not found: {playlist_path}")
         sys.exit(1)
@@ -318,8 +319,18 @@ def main():
         print("No channels found in playlist.")
         sys.exit(1)
 
-    port = find_free_port()
     html = build_html(channels)
+
+    # --build flag: export static index.html for deployment
+    if "--build" in sys.argv:
+        out_path = os.path.join(script_dir, "index.html")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"Built {len(channels)} channels into: {out_path}")
+        print("Deploy this single file to any static hosting (GitHub Pages, Netlify, Vercel, etc.)")
+        return
+
+    port = find_free_port()
     handler = make_handler(html)
     server = HTTPServer(("127.0.0.1", port), handler)
 
@@ -329,7 +340,6 @@ def main():
     print("Press Ctrl+C to stop.")
     print()
 
-    # Open browser after a short delay so the server is ready
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
 
     try:
