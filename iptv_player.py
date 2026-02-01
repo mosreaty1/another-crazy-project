@@ -387,10 +387,11 @@ def main():
     # Server mode: proxy enabled
     html = build_html(channels, use_proxy=True)
 
-    # Use PORT env var for deployment platforms (Render, Railway, etc.)
+    # Use PORT/IP env vars for deployment platforms
     env_port = os.environ.get("PORT")
+    env_ip = os.environ.get("IP")
     if env_port:
-        host = "0.0.0.0"
+        host = env_ip or "0.0.0.0"
         port = int(env_port)
         is_deploy = True
     else:
@@ -399,7 +400,16 @@ def main():
         is_deploy = False
 
     handler = make_handler(html)
-    server = HTTPServer((host, port), handler)
+
+    # Use IPv6 server if host is an IPv6 address (e.g. alwaysdata)
+    if ":" in host:
+        import http.server
+        class HTTPServerV6(http.server.HTTPServer):
+            import socket as _sock
+            address_family = _sock.AF_INET6
+        server = HTTPServerV6((host, port), handler)
+    else:
+        server = HTTPServer((host, port), handler)
 
     print(f"Loaded {len(channels)} channels.")
     print(f"IPTV Player running at: http://{host}:{port}")
